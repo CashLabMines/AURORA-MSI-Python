@@ -1,0 +1,109 @@
+# code.py — CircuitPython for Raspberry Pi Pico 2 W (RP2350)
+# Function:
+#   - GPIO0–14: PWM LEDs (50% duty)
+#   - GPIO15–22: digital power-enable outputs
+#   - Blinks onboard LED at startup and shutdown
+#   - For each LED PWM, loop through all enables one at a time
+
+import time
+import board
+import digitalio
+import pwmio
+
+# ---------- Tunable parameters ----------
+STARTUP_DELAY = 2.0      # seconds to wait before enabling power
+LED_ON_TIME   = 1.0      # seconds each LED stays ON
+BETWEEN_STEPS = 0.10     # short pause between steps
+PWM_FREQ      = 1000     # Hz PWM frequency for LEDs
+PWM_DUTY      = 0.5      # 50% duty cycle
+BLINK_DELAY   = 0.3      # onboard LED blink interval
+
+LED_PINS = range(0, 15)   # GP0–GP14 → PWM LEDs
+EN_PINS  = range(15, 23)  # GP15–GP22 → digital enables
+# ---------------------------------------
+
+# === Onboard LED ===
+onboard_led = digitalio.DigitalInOut(board.LED)
+onboard_led.direction = digitalio.Direction.OUTPUT
+
+def blink_onboard(times=3, delay=BLINK_DELAY):
+    """Blink the onboard LED a specified number of times."""
+    for _ in range(times):
+        onboard_led.value = True
+        time.sleep(delay)
+        onboard_led.value = False
+        time.sleep(delay)
+
+# === Helper to make a digital output pin ===
+def make_output(pin_number, initial=False):
+    dio = digitalio.DigitalInOut(getattr(board, f"GP{pin_number}"))
+    dio.direction = digitalio.Direction.OUTPUT
+    dio.value = initial
+    return dio
+
+# === Initialize LEDs as PWM outputs ===
+led_pwms = []
+for n in LED_PINS:
+    pwm = pwmio.PWMOut(
+        getattr(board, f"GP{n}"),
+        frequency=PWM_FREQ,
+        duty_cycle=0,   # start off
+    )
+    led_pwms.append(pwm)
+
+# === Initialize enable pins as digital outputs ===
+enables = [make_output(n, False) for n in EN_PINS]
+
+def all_enables_low():
+    for en in enables:
+        en.value = False
+
+def all_leds_off():
+    for pwm in led_pwms:
+        pwm.duty_cycle = 0
+
+try:
+    # === STARTUP SEQUENCE ===
+    blink_onboard(3)
+    all_leds_off()
+    all_enables_low()
+    print("Waiting for stabilization...")
+    time.sleep(STARTUP_DELAY)
+    print("Starting PWM LED / Enable sequence...")
+
+    # === MAIN LOOP ===
+    for ii in range(1):
+        for led_idx, pwm in enumerate(led_pwms):
+            print(f"\n--- LED PWM {LED_PINS[led_idx]} sequence ---")
+            for en_idx, en in enumerate(enables):
+                print(f"Enable {EN_PINS[en_idx]} -> LED {LED_PINS[led_idx]} PWM 50%")
+
+                # Turn on this LED PWM at 50% duty
+                pwm.duty_cycle = int(65535 * PWM_DUTY)
+
+                # Turn on this enable
+                en.value = True
+
+                # Hold for 1 second
+                time.sleep(LED_ON_TIME)
+
+                # Turn off both
+                pwm.duty_cycle = 0
+                en.value = False
+                time.sleep(BETWEEN_STEPS)
+
+except KeyboardInterrupt:
+    pass
+finally:
+    # === SHUTDOWN SEQUENCE ===
+    print("\nStopping sequence, shutting down...")
+    all_leds_off()
+    all_enables_low()
+    blink_onboard(3)
+
+    # Deinitialize everything
+    for pwm in led_pwms:
+        pwm.deinit()
+    for en in enables:
+        en.deinit()
+    onboard_led.deinit()
